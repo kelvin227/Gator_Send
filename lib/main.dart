@@ -18,7 +18,8 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'File Transfer App',
-      theme: ThemeData(primarySwatch: Colors.blue),
+      theme: ThemeData.light(),
+      darkTheme: ThemeData.dark(),
       home: isDesktop ? const DesktopScreen() : const MobileScreen(),
     );
   }

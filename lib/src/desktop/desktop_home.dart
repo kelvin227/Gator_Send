@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:gator_send/src/common/file_transfer_service.dart';
@@ -14,11 +15,40 @@ class _DesktopScreenState extends State<DesktopScreen> {
   final List<String> _receivedFiles = [];
   String _status = "Initializing...";
   String _lanIp = "Unknown";
+  RawDatagramSocket? _udpSocket;
+  bool _isBroadcasting = false;
 
   @override
   void initState() {
     super.initState();
     _initServer();
+    startDiscoveryBroadcast(5000);
+  }
+
+  Future<void> startDiscoveryBroadcast(int serverPort) async {
+    if (_isBroadcasting) return;
+    _isBroadcasting = true;
+
+    _udpSocket = await RawDatagramSocket.bind(
+      InternetAddress.anyIPv4,
+      54545,
+      reuseAddress: true,
+    );
+
+    Timer.periodic(const Duration(seconds: 2), (timer) {
+      if (!_isBroadcasting) {
+        timer.cancel();
+        return;
+      }
+
+      final message = "GATOR_PC;$serverPort";
+      _udpSocket!.broadcastEnabled = true;
+      _udpSocket!.send(
+        message.codeUnits,
+        InternetAddress("255.255.255.255"),
+        54545,
+      );
+    });
   }
 
   Future<void> _initServer() async {
@@ -37,7 +67,7 @@ class _DesktopScreenState extends State<DesktopScreen> {
     }
 
     // Start file server
-    await _service.startServer(4567, (file, ip) {
+    await _service.startServer(5000, (file, ip) {
       setState(() {
         _receivedFiles.add('${file.path} from $ip');
         _status = 'Received file from $ip';
@@ -45,7 +75,7 @@ class _DesktopScreenState extends State<DesktopScreen> {
     });
 
     setState(() {
-      _status = "Server running on $_lanIp:4567 (broadcasting)";
+      _status = "Server running on $_lanIp:5000 (broadcasting)";
     });
   }
 
