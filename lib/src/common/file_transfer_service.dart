@@ -1,55 +1,86 @@
-import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:async';
 
 class FileTransferService {
   ServerSocket? _server;
   Socket? _client;
+  RawDatagramSocket? _udpSocket;
 
-  /// ---- Start server (Desktop) ----
-  /// `port`: listening port
-  /// `onReceive`: callback with received File and sender IP
-  Future<void> startServer(int port, Function(File, String) onReceive) async {
+  /// Desktop: Start file server and announce via UDP broadcast
+  Future<void> startServer(int port, Function(File, String) onReceive,
+      {int broadcastPort = 4568}) async {
     _server = await ServerSocket.bind(InternetAddress.anyIPv4, port);
     print('Server listening on port $port');
 
+    // Start broadcasting presence every 2 seconds
+    _udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+    Timer.periodic(const Duration(seconds: 2), (timer) {
+      final message = 'FILE_SERVER:$port';
+      _udpSocket!.send(
+        message.codeUnits,
+        InternetAddress('255.255.255.255'),
+        broadcastPort,
+      );
+    });
+
     _server!.listen((client) async {
       print('Client connected: ${client.remoteAddress.address}');
-
       final file = File(
-        'received_from_mobile_${DateTime.now().millisecondsSinceEpoch}',
-      );
+          'received_${DateTime.now().millisecondsSinceEpoch}');
       final sink = file.openWrite();
-
-      // Fix: cast Socket (Stream<Uint8List>) to match IOSink
       await client.cast<Uint8List>().pipe(sink as StreamConsumer<Uint8List>);
-
       await sink.close();
       onReceive(file, client.remoteAddress.address);
-
       client.destroy();
     });
   }
 
-  /// ---- Connect to server and send a file (Mobile) ----
-  /// `filePath`: path of file to send
-  /// `serverIp`: IP address of desktop/server
-  /// `port`: server port
-  Future<void> sendFile(String filePath, String serverIp, int port) async {
-    final file = File(filePath);
+  /// Mobile: Discover servers on LAN
+  Future<void> discoverServers(
+      {int broadcastPort = 4568,
+        Function(String ip, int port)? onServerFound}) async {
+    _udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+    _udpSocket!.broadcastEnabled = true;
 
-    _client = await Socket.connect(serverIp, port);
-    print('Connected to server: $serverIp:$port');
-
-    await _client!.addStream(file.openRead());
-    await _client!.flush();
-    await _client!.close();
-
-    print('File sent successfully.');
+    _udpSocket!.listen((event) {
+      if (event == RawSocketEvent.read) {
+        final dg = _udpSocket!.receive();
+        if (dg != null) {
+          final message = String.fromCharCodes(dg.data);
+          if (message.startsWith('FILE_SERVER:')) {
+            final portStr = message.split(':')[1];
+            final ip = dg.address.address;
+            final port = int.tryParse(portStr) ?? 4567;
+            if (onServerFound != null) onServerFound(ip, port);
+          }
+        }
+      }
+    });
   }
 
-  /// ---- Stop server ----
-  void disposeServer() {
+  Future<void> sendFile(
+      String filePath, String serverIp, int port, Function(double)? onProgress) async {
+    final file = File(filePath);
+    final length = await file.length();
+
+    _client = await Socket.connect(serverIp, port);
+    int sentBytes = 0;
+
+    await for (final chunk in file.openRead()) {
+      _client!.add(chunk);
+      sentBytes += chunk.length;
+      if (onProgress != null) {
+        onProgress(sentBytes / length);
+      }
+    }
+
+    await _client!.flush();
+    await _client!.close();
+  }
+
+  void dispose() {
     _server?.close();
+    _udpSocket?.close();
   }
 }

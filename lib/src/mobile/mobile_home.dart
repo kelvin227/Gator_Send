@@ -1,57 +1,93 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import '../common/file_transfer_service.dart';
+import 'package:gator_send/src/common/file_transfer_service.dart';
 
-class MobileHome extends StatefulWidget {
-  const MobileHome({super.key});
+class MobileScreen extends StatefulWidget {
+  const MobileScreen({super.key});
 
   @override
-  State<MobileHome> createState() => _MobileHomeState();
+  State<MobileScreen> createState() => _MobileScreenState();
 }
 
-class _MobileHomeState extends State<MobileHome> {
-  final FileTransferService _fts = FileTransferService();
-  String _serverIp = "";
-  String _status = "No server selected";
+class _MobileScreenState extends State<MobileScreen> {
+  final FileTransferService _service = FileTransferService();
+  String? _filePath;
+  double _progress = 0.0;
 
-  Future<void> _pickAndSend() async {
-    final res = await FilePicker.platform.pickFiles();
-    if (res == null) return;
-    final path = res.files.single.path;
-    if (path == null) return;
+  // Discovered servers: map IP -> port
+  final Map<String, int> _servers = {};
 
-    if (_serverIp.isEmpty) {
-      setState(() => _status = "Set server IP first");
-      return;
-    }
+  @override
+  void initState() {
+    super.initState();
+    _service.discoverServers(onServerFound: (ip, port) {
+      setState(() {
+        _servers[ip] = port;
+      });
+    });
+  }
 
-    setState(() => _status = "Sending...");
-    await _fts.sendFile(path, _serverIp, 5000);
-    setState(() => _status = "File sent!");
+  void _pickFile() async {
+    final result = await FilePicker.platform.pickFiles();
+    if (result == null) return;
+
+    setState(() {
+      _filePath = result.files.single.path;
+      _progress = 0.0;
+    });
+  }
+
+  void _sendFile(String ip, int port) async {
+    if (_filePath == null) return;
+
+    await _service.sendFile(_filePath!, ip, port, (progress) {
+      setState(() {
+        _progress = progress;
+      });
+    });
+
+    setState(() {
+      _filePath = null;
+      _progress = 0.0;
+    });
+  }
+
+  @override
+  void dispose() {
+    _service.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Mobile File Share")),
+      appBar: AppBar(title: const Text('Mobile File Sender')),
       body: Padding(
-        padding: const EdgeInsets.all(12.0),
+        padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            TextField(
-              decoration: const InputDecoration(
-                labelText: "Server IP",
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (val) => _serverIp = val,
-            ),
-            const SizedBox(height: 12),
             ElevatedButton(
-              onPressed: _pickAndSend,
-              child: const Text("Pick File & Send"),
+              onPressed: _pickFile,
+              child: const Text('Pick File'),
             ),
-            const SizedBox(height: 12),
-            Text(_status),
+            if (_filePath != null) Text('Selected: $_filePath'),
+            const SizedBox(height: 10),
+            LinearProgressIndicator(value: _progress),
+            const SizedBox(height: 20),
+            const Text('Discovered Servers:'),
+            Expanded(
+              child: ListView(
+                children: _servers.entries.map((e) {
+                  return ListTile(
+                    title: Text('${e.key}:${e.value}'),
+                    trailing: ElevatedButton(
+                      onPressed: () => _sendFile(e.key, e.value),
+                      child: const Text('Send'),
+                    ),
+                  );
+                }).toList(),
+              ),
+            )
           ],
         ),
       ),
